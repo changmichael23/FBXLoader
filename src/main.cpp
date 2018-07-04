@@ -12,7 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp> // glm::translate, glm::rotate, glm::scale, glm::perspective
 #include <glm/gtc/type_ptr.hpp> // glm::value_ptr
 #include "EsgiShader.h"
-
+#include <vector>
 #include "FBXLoader.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -35,6 +35,7 @@ struct Object
 {
 	glm::mat4 worldMatrix;
 } g_Objet;
+
 
 GLuint VBO_position, VBO_normal, VBO_texture, VAO, IBO;
 GLuint tex0,tex1,tex2;
@@ -159,7 +160,7 @@ void Render()
 	glUseProgram(basicProgram);
 
 	g_Camera.projectionMatrix = glm::perspectiveFov(45.f, (float)WIDTH, (float)HEIGHT, 0.1f, 1000.f);
-	glm::vec4 position = glm::vec4(0.0f, -0.0f, 4.0f, 1.0f);
+	glm::vec4 position = glm::vec4(-1.0f, 2.5f, 12.0f, 1.0f);
 	g_Camera.viewMatrix = glm::lookAt(glm::vec3(position), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
 
 	auto projLocation = glGetUniformLocation(basicProgram, "u_projectionMatrix");
