@@ -3,10 +3,16 @@
 layout(location=0) in vec4 a_position;
 layout(location=1) in vec3 a_normal;
 layout(location=2) in vec2 a_texCoords;
+layout(location=3) in vec4 a_jointInfluence;
 
 uniform mat4 u_worldMatrix;
 uniform mat4 u_viewMatrix;
 uniform mat4 u_projectionMatrix;
+
+uniform vec4 u_indiceInfluence;
+uniform vec4 u_weights;
+uniform mat4 u_bindPose;
+uniform mat4 u_joint;
 
 out vec3 v_Position;
 out vec3 v_CameraPosition;

@@ -25,6 +25,8 @@ const GLint WIDTH = 1920, HEIGHT = 1080;
 EsgiShader g_BasicShader;
 GLFWwindow *window;
 
+int frameIndex = 0;
+
 struct ViewProj
 {
 	glm::mat4 viewMatrix;
@@ -37,7 +39,7 @@ struct Object
 } g_Objet;
 
 
-GLuint VBO_position, VBO_normal, VBO_texture, VAO, IBO;
+GLuint VBO_position, VBO_normal, VBO_texture, VBO_jointInfluence, VAO, IBO;
 GLuint tex0,tex1,tex2;
 
 bool LoadAndCreateTextureRGBA(const char *filename, GLuint &texID, bool linear = false)
@@ -104,6 +106,7 @@ bool Initialise()
 	glGenBuffers(1, &VBO_position);
 	glGenBuffers(1, &VBO_normal);
 	glGenBuffers(1, &VBO_texture);
+	glGenBuffers(1, &VBO_jointInfluence);
 	glBindVertexArray(VAO);
 
 	glBindBuffer(GL_ARRAY_BUFFER, VBO_position);
@@ -122,6 +125,13 @@ bool Initialise()
 	glEnableVertexAttribArray(2);
 
 
+	// TODO : Pre-traitement tableau weight
+	/*
+	glBindBuffer(GL_ARRAY_BUFFER, VBO_jointInfluence);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * testFBX->influences.size() * 4, testFBX->influences, GL_STATIC_DRAW);
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	glEnableVertexAttribArray(3);
+	*/
 
 	glBindVertexArray(0);
 
@@ -160,8 +170,28 @@ void Render()
 	glUseProgram(basicProgram);
 
 	g_Camera.projectionMatrix = glm::perspectiveFov(45.f, (float)WIDTH, (float)HEIGHT, 0.1f, 1000.f);
-	glm::vec4 position = glm::vec4(-1.0f, 2.5f, 12.0f, 1.0f);
+	glm::vec4 position = glm::vec4(-1.0f, 2.5f, 5.0f, 1.0f);
 	g_Camera.viewMatrix = glm::lookAt(glm::vec3(position), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
+
+	// hauteur de la camera 
+	testFBX->CalculateBoundingBox();
+	g_Camera.viewMatrix[3].y = (testFBX->g_Mesh.min.y - testFBX->g_Mesh.max.y) / 2.f;
+
+	// eloignement de la camera de sorte a aligner la bounding box sur l’ecran
+	// eloignement base sur la distance focale tan(FOV/2) rapportee a la demi-hauteur
+	float cotan = 1.f / tan(45.0f * 0.5f);
+	g_Camera.viewMatrix[3].z = -80 + g_Camera.viewMatrix[3].y * cotan;
+
+	/*
+	testFBX->vertex_pos = NULL;
+	
+	for (int i = 0; i < testFBX->animation.keyframes[frameIndex]; ++i)
+	{
+		testFBX->vertex_pos[]
+	}
+	
+	++frameIndex;
+	*/
 
 	auto projLocation = glGetUniformLocation(basicProgram, "u_projectionMatrix");
 	glUniformMatrix4fv(projLocation, 1, GL_FALSE, glm::value_ptr(g_Camera.projectionMatrix));
@@ -171,6 +201,18 @@ void Render()
 
 	auto worldLocation = glGetUniformLocation(basicProgram, "u_worldMatrix");
 	glUniformMatrix4fv(worldLocation, 1, GL_FALSE, glm::value_ptr(g_Objet.worldMatrix));
+
+	auto indicesInfluence = glGetUniformLocation(basicProgram, "u_indiceInfluence");
+	glUniform4f(indicesInfluence, 1, GL_FALSE, glm::value_ptr());
+
+	auto weights = glGetUniformLocation(basicProgram, "u_weights");
+	glUniform4f(weights, 1, GL_FALSE, glm::value_ptr());
+
+	auto bindPoseMat = glGetUniformLocation(basicProgram, "u_bindPose");
+	glUniformMatrix4fv(bindPoseMat, 1, GL_FALSE, glm::value_ptr());
+
+	auto bindPoseMat = glGetUniformLocation(basicProgram, "u_joint");
+	glUniformMatrix4fv(bindPoseMat, 1, GL_FALSE, glm::value_ptr());
 
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, tex0);

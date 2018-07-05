@@ -28,6 +28,8 @@ public:
 	FbxLongLong startFrame;
 	FbxLongLong stopFrame;
 
+	
+
 	//FbxMesh* g_Mesh;
 
 	struct DeformerInfluence
@@ -48,16 +50,27 @@ public:
 	struct Mesh
 	{
 		std::vector<glm::mat4> bindPose;
+		glm::vec3 min;
+		glm::vec3 max;
 	} g_Mesh;
 
 	struct Joint
 	{
 		glm::mat4 transform;
 	};
+
+	struct Frame
+	{
+		std::vector<Joint> joints = std::vector<Joint>();
+	};
+
 	struct Animation
 	{
-		std::vector<Joint> keyframes;
+		std::vector<Frame> keyframes = std::vector<Frame>();
 	};
+
+	Animation animation;
+	std::vector<DeformerInfluence> influences;
 
 	FBXLoader(GLuint VVBO, GLuint IVBO, GLuint VAO)
 	{
@@ -80,6 +93,7 @@ public:
 		scene = FbxScene::Create(g_fbxManager, "Ma Scene");
 		FbxImporter *importer = FbxImporter::Create(g_fbxManager, "");
 		bool status = importer->Initialize("../samples/ThirdPersonWalk.FBX", -1, g_fbxManager->GetIOSettings());
+		//bool status = importer->Initialize("../samples/ironman/ironman.fbx", -1, g_fbxManager->GetIOSettings());
 		status = importer->Import(scene);
 		importer->Destroy();
 		FbxNode* rootNode = scene->GetRootNode();
@@ -116,14 +130,11 @@ public:
 			//finalGlobalTransform = globalTransform * geometryTransform;
 			ProcessNode(rootNode, rootNode);
 			FbxTimeSpan timeSpan = FbxTimeSpan();
-			//ProcessSkeleton(rootNode, rootNode, timeSpan);
+			ProcessSkeleton(rootNode, rootNode, timeSpan);
 			FbxAnimStack* anim = GetAnimAtIndex(rootNode, 0);
-			int u = 0;
+
 		}
 		//g_fbxManager->Destroy();
-
-
-
 	}
 
 	void ProcessSkeleton(FbxNode* node, FbxNode* parent, FbxTimeSpan animInterval)
@@ -150,6 +161,18 @@ public:
 		}
 	}
 
+	void CalculateBoundingBox()
+	{
+		pMesh->ComputeBBox();
+		FbxVector4 bboxMin = pMesh->BBoxMin.Get();
+		FbxVector4 bboxMax = pMesh->BBoxMax.Get();
+
+		bboxMin = finalGlobalTransform.MultT(bboxMin);
+		bboxMax = finalGlobalTransform.MultT(bboxMax);
+		g_Mesh.min = glm::vec3(bboxMin.mData[0], bboxMin.mData[1], bboxMin.mData[2]);
+		g_Mesh.max = glm::vec3(bboxMax.mData[0], bboxMax.mData[1], bboxMax.mData[2]);
+	}
+
 	void GetBindPose()
 	{
 		// Recupere le nombre de "deformer"s de type "skin" (pour le skinning / rigging).
@@ -157,6 +180,7 @@ public:
 		// Par la suite on va ensuite se servir de chaque "joint" de la bind pose pour transformer les vertices du repere global du joint vers son repere local.
 		// On va donc s'interesser surtout a la matrice INVERSE du joint.
 		int skinCount = pMesh->GetDeformerCount(FbxDeformer::eSkin);
+
 		FbxSkin* skin;
 		auto skinIndex = 0;
 		int jointsCount = 0;
@@ -169,7 +193,12 @@ public:
 			g_Mesh.bindPose.resize(boneCount);
 		}
 
-		std::vector<DeformerInfluence> influences(pMesh->GetControlPointsCount());
+		influences = std::vector<DeformerInfluence>(pMesh->GetControlPointsCount());
+		animation.keyframes.resize(stopFrame - startFrame + 1);
+		for (std::vector<Frame>::iterator it = animation.keyframes.begin(); it != animation.keyframes.end(); ++it)
+		{
+			it->joints.reserve(jointsCount + 1);
+		}
 
 		for (auto clusterIndex = 0; clusterIndex < jointsCount; clusterIndex++)
 		{
@@ -195,8 +224,9 @@ public:
 				for (auto j = 0; j < 4; ++j)
 					bindPoseJointMatrix[i][j] = (float)col.mData[j];
 			}
-			g_Mesh.bindPose[jointIndex] = bindPoseJointMatrix;
 
+			g_Mesh.bindPose[jointIndex] = bindPoseJointMatrix;
+		    
 			// 2. Traitement des influences
 
 			int influenceCount = cluster->GetControlPointIndicesCount();
@@ -214,12 +244,14 @@ public:
 			// toutes les keyframes des bones du squelette à un instant t
 			
 			FbxTime evalTime = 0;
-			Animation animation;
+	
 			for (auto frame = startFrame; frame <= stopFrame; frame++)
 			{
 				evalTime.SetFrame(frame);
+
 				auto& currentKey = animation.keyframes[frame];
 
+				// Récupere la matrice de transformation d'un bone  à un instant T ?
 				FbxAMatrix jointTransform = cluster->GetLink()->EvaluateGlobalTransform(evalTime);
 
 				// une simple structure qui stocke un glm::mat4				
@@ -230,7 +262,7 @@ public:
 						jointData.transform[i][j] = (float)col.mData[j];
 				}
 
-				currentKey.joints[jointIndex] = jointData;
+				currentKey.joints.insert(currentKey.joints.begin() + jointIndex, jointData);
 			}
 		}
 	}
@@ -250,7 +282,7 @@ public:
 		rootNode->GetAnimationInterval(animInterval);
 
 		int animStackCount = scene->GetSrcObjectCount<FbxAnimStack>();
-		FbxAnimStack* animStack = scene->GetSrcObject<FbxAnimStack>(0);
+		FbxAnimStack* animStack = scene->GetSrcObject<FbxAnimStack>(index);
 		if (animStack)
 		{
 			FbxString animStackName = animStack->GetName();
@@ -260,9 +292,9 @@ public:
 			FbxLongLong animduration = end.GetFrameCount(FbxTime::eFrames30) - start.GetFrameCount(FbxTime::eFrames30);
 
 			ProcessSkeleton(rootNode, nullptr, animInterval);
+			int nbFrame = GetFrameCount(animStack->GetLocalTimeSpan());
+			GetBindPose();
 		}
-
-		GetBindPose();
 
 		return animStack;
 	}
