@@ -39,7 +39,7 @@ void main(void) {
 	 specularFactor* texture(u_SamplerSpec, v_TexCoords).rgb;
 
   	Fragment = vec4(color,1.0);
-
+	
 	//Fragment = vec4(1.0,0.0,0.0,1.0);
 
 }

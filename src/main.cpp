@@ -23,7 +23,55 @@ FBXLoader* testFBX;
 const GLint WIDTH = 1920, HEIGHT = 1080;
 
 EsgiShader g_BasicShader;
+EsgiShader g_ComputeShader;
 GLFWwindow *window;
+
+// --------------
+#define XMIN -1
+#define XMAX 1
+
+#define YMIN 5
+#define YMAX 8
+
+#define ZMIN -1
+#define ZMAX 1
+
+#define VXMIN -0.0001
+#define VXMAX 0.0001
+
+#define VYMIN -0.0001
+#define VYMAX 0.0001
+
+#define VZMIN -0.0001
+#define VZMAX 0.0001
+
+
+#define NUM_PARTICLES 1024 * 1024
+// total number of particles to move
+#define WORK_GROUP_SIZE128
+// # work-items per work-group
+struct pos
+{
+	float x, y, z, w;
+	// positions
+};
+struct vel
+{
+	float vx, vy, vz, vw;    // velocities
+};
+struct color
+{
+	float r, g, b, a;
+	// colors
+};
+// need to do the following for both position, velocity, and colors of the particles :
+GLuint posSSbo;
+GLuint velSSbo;
+GLuint colSSbo;
+
+
+
+
 
 struct ViewProj
 {
@@ -38,6 +86,17 @@ struct Object
 
 GLuint VBO_position, VBO_normal, VBO_texture, VAO, IBO;
 GLuint tex0,tex1,tex2;
+
+#define TOP	2147483647.		// 2^31 - 1	
+
+float
+Ranf(float low, float high)
+{
+	long random();		// returns integer 0 - TOP
+
+	float r = (float)rand();
+	return(low + r * (high - low) / (float)RAND_MAX);
+}
 
 bool LoadAndCreateTextureRGBA(const char *filename, GLuint &texID, bool linear = false)
 {
@@ -60,21 +119,19 @@ bool LoadAndCreateTextureRGBA(const char *filename, GLuint &texID, bool linear =
 	}
 	return (data != nullptr);
 }
-
+struct pos *points;
 bool Initialise()
 {
 	testFBX = new FBXLoader(VBO_position,IBO,VAO);
 	testFBX->LoadFBX();
-	//testFBX->vertex_data
 
-	//for (int i = 0; i < testFBX->nb_normals; ++i)
-	//{
-	//	std::cerr<<testFBX->vertex_nor[i]<<std::endl;
-	//}
-	g_BasicShader.LoadVertexShader("../src/shaders/basic.vs");
-	g_BasicShader.LoadFragmentShader("../src/shaders/basic.fs");
+	g_BasicShader.LoadVertexShader("../src/shaders/basicParticle.vs");
+	g_BasicShader.LoadFragmentShader("../src/shaders/basicParticle.fs");
+	g_ComputeShader.LoadComputeShader("../src/shaders/basicParticle.cs");
 	g_BasicShader.Create();
+	g_ComputeShader.Create();
 
+	
 	// load texture
 
 	LoadAndCreateTextureRGBA("../samples/ironman/ironman.fbm/ironman.dff.png", tex0);
@@ -86,57 +143,107 @@ bool Initialise()
 		0.5f, -0.5f,
 		0.0f, 0.5f
 	};
-	/*glGenBuffers(1, &IBO);
-	glBindVertexArray(VAO);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
-
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, testFBX->nb_indices * sizeof(GLuint), testFBX->vertex_ind, GL_STATIC_DRAW);
-*/
-
-	//glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(GLfloat), (GLvoid *)0);
-	//glEnableVertexAttribArray(0);
-
-	//glBindVertexArray(0);
-
 
 	glGenVertexArrays(1, &VAO);
-	glGenBuffers(1, &VBO_position);
+	/*glGenBuffers(1, &VBO_position);
 	glGenBuffers(1, &VBO_normal);
-	glGenBuffers(1, &VBO_texture);
-	glBindVertexArray(VAO);
+	glGenBuffers(1, &VBO_texture);*/
+	
+	//glBindVertexArray(VAO);
 
-	glBindBuffer(GL_ARRAY_BUFFER, VBO_position);
-	glBufferData(GL_ARRAY_BUFFER, testFBX->nb_vertices*4*sizeof(float), testFBX->vertex_pos, GL_STATIC_DRAW);
+	//glBindBuffer(GL_ARRAY_BUFFER, VBO_position);
+	//glBufferData(GL_ARRAY_BUFFER, testFBX->nb_vertices * 4 * sizeof(float), testFBX->vertex_pos, GL_STATIC_DRAW);
+	//glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	//glEnableVertexAttribArray(0);
+
+	//glBindBuffer(GL_ARRAY_BUFFER, VBO_normal);
+	//glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * testFBX->nb_normals * 3, testFBX->vertex_nor, GL_STATIC_DRAW);
+	//glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	//glEnableVertexAttribArray(1);
+
+	//glBindBuffer(GL_ARRAY_BUFFER, VBO_texture);
+	//glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * testFBX->nb_uvs * 2, testFBX->vertex_uv, GL_STATIC_DRAW);
+	//glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	//glEnableVertexAttribArray(2);
+
+	//--
+	
+	glGenBuffers(1, &posSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, posSSbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_PARTICLES * sizeof(
+			struct pos), NULL, GL_STATIC_DRAW);
+	GLint bufMask = GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT;
+	// the invalidate makes a big difference when re-writing
+	points = (struct pos *) glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, NUM_PARTICLES * sizeof(struct pos), bufMask);
+	for (int i = 0; i < NUM_PARTICLES; i++)
+	{
+		points[i].x = Ranf(XMIN, XMAX);
+		points[i].y = Ranf(YMIN, YMAX);
+		points[i].z = Ranf(ZMIN, ZMAX);
+		points[i].w = 1.;
+	}
+	glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, posSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	glGenBuffers(1, &velSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, velSSbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_PARTICLES * sizeof(
+			struct vel), NULL, GL_STATIC_DRAW);
+	struct vel *vels = (struct vel *) glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, NUM_PARTICLES * sizeof(struct vel), bufMask);
+	for (int i = 0; i < NUM_PARTICLES; i++)
+	{
+		vels[i].vx = Ranf(VXMIN, VXMAX);
+		vels[i].vy = Ranf(VYMIN, VYMAX);
+		vels[i].vz = Ranf(VZMIN, VZMAX);
+		vels[i].vw = 0.;
+	}
+	glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, velSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	glGenBuffers(1, &colSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, colSSbo);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, NUM_PARTICLES * sizeof(
+		struct color), NULL, GL_STATIC_DRAW);
+	struct color *colors = (struct color *) glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, NUM_PARTICLES * sizeof(struct color), bufMask);
+	for (int i = 0; i < NUM_PARTICLES; i++)
+	{
+		colors[i].r = Ranf(.3f, 1.);
+		colors[i].g = Ranf(.3f, 1.);
+		colors[i].b = Ranf(.3f, 1.);
+		colors[i].a = 1.;
+	}
+	glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, colSSbo);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	glBindVertexArray(VAO);
+	glBindBuffer(GL_ARRAY_BUFFER, posSSbo);
+	glBufferData(GL_ARRAY_BUFFER, NUM_PARTICLES * 4 * sizeof(float), points, GL_STATIC_DRAW);
 	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
 	glEnableVertexAttribArray(0);
 
-	glBindBuffer(GL_ARRAY_BUFFER, VBO_normal);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * testFBX->nb_normals * 3, testFBX->vertex_nor, GL_STATIC_DRAW);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
-	glEnableVertexAttribArray(1);
-
-	glBindBuffer(GL_ARRAY_BUFFER, VBO_texture);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * testFBX->nb_uvs * 2, testFBX->vertex_uv, GL_STATIC_DRAW);
-	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
-	glEnableVertexAttribArray(2);
-
-
+	glBindBuffer(GL_ARRAY_BUFFER, colSSbo);
+	glBufferData(GL_ARRAY_BUFFER, NUM_PARTICLES * 4 * sizeof(float), colors, GL_STATIC_DRAW);
+	glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	glEnableVertexAttribArray(6);
 
 	glBindVertexArray(0);
+	
 
 	return true;
 }
 
 void Terminate() {
 	g_BasicShader.Destroy();
+	g_ComputeShader.Destroy();
 	glDeleteBuffers(1, &VBO_position);
 	glDeleteBuffers(1, &VBO_normal);
 	glDeleteBuffers(1, &VBO_texture);
 	glDeleteBuffers(1, &tex0);
 	glDeleteBuffers(1, &tex1);
 	glDeleteBuffers(1, &tex2);
-
-	
 }
 
 void Resize(GLint width, GLint height) {
@@ -152,12 +259,18 @@ void Render()
 
 	glEnable(GL_FRAMEBUFFER_SRGB);
 	glClearColor(0.5f, 0.5f, 0.5f, 1.f);
+
 	
+	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 	// alternativement on peut utiliser la nouvelle fonction glClearBufferfv()
+	auto computeProgram = g_ComputeShader.GetProgram();
+	glUseProgram(computeProgram);
+
+	glDispatchCompute(NUM_PARTICLES /256, 1, 1);
+	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
 	auto basicProgram = g_BasicShader.GetProgram();
 	glUseProgram(basicProgram);
-
 	g_Camera.projectionMatrix = glm::perspectiveFov(45.f, (float)WIDTH, (float)HEIGHT, 0.1f, 1000.f);
 	glm::vec4 position = glm::vec4(0.0f, -0.0f, 4.0f, 1.0f);
 	g_Camera.viewMatrix = glm::lookAt(glm::vec3(position), glm::vec3(0.f), glm::vec3(0.f, 1.f, 0.f));
@@ -171,26 +284,72 @@ void Render()
 	auto worldLocation = glGetUniformLocation(basicProgram, "u_worldMatrix");
 	glUniformMatrix4fv(worldLocation, 1, GL_FALSE, glm::value_ptr(g_Objet.worldMatrix));
 
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, tex0);
-	auto diffuseMapLocation = glGetUniformLocation(basicProgram, "u_SamplerDiffuse");
-	glUniform1i(diffuseMapLocation, 0);
+	//glActiveTexture(GL_TEXTURE0);
+	//glBindTexture(GL_TEXTURE_2D, tex0);
+	//auto diffuseMapLocation = glGetUniformLocation(basicProgram, "u_SamplerDiffuse");
+	//glUniform1i(diffuseMapLocation, 0);
 
-	glActiveTexture(GL_TEXTURE1);
-	glBindTexture(GL_TEXTURE_2D, tex1);
-	auto specularMapLocation = glGetUniformLocation(basicProgram, "u_SamplerSpec");
-	glUniform1i(specularMapLocation, 1);
+	//glActiveTexture(GL_TEXTURE1);
+	//glBindTexture(GL_TEXTURE_2D, tex1);
+	//auto specularMapLocation = glGetUniformLocation(basicProgram, "u_SamplerSpec");
+	//glUniform1i(specularMapLocation, 1);
 
-	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, tex2);
-	auto normalMapLocation = glGetUniformLocation(basicProgram, "u_SamplerNorm");
-	glUniform1i(normalMapLocation, 2);
+	//glActiveTexture(GL_TEXTURE2);
+	//glBindTexture(GL_TEXTURE_2D, tex2);
+	//auto normalMapLocation = glGetUniformLocation(basicProgram, "u_SamplerNorm");
+	//glUniform1i(normalMapLocation, 2);
 
 	
 
 	// zero correspond ici a la valeur de layout(location=0) dans le shader basic.vs
+	//glBindVertexArray(VAO);
+	//glDrawArrays(GL_TRIANGLES, 0, testFBX->nb_vertices);
+	
+	//glBindVertexArray(VAO);
+	//glBindBuffer(GL_ARRAY_BUFFER, posSSbo);
+	//glVertexPointer(4, GL_FLOAT, 0, (void *)0);
+	//glEnableClientState(GL_VERTEX_ARRAY);
+
+
+	/*glBindBuffer(GL_ARRAY_BUFFER, colSSbo);
+	glColorPointer(4, GL_FLOAT, 0, (void *)0);
+	glEnableClientState(GL_COLOR_ARRAY);
+	glColor3f(1, 0, 0);*/
+
+
+	//glPointSize(10);
+	//glDrawArrays(GL_POINTS, 0, NUM_PARTICLES);
+	//// glDisableClientState(GL_VERTEX_ARRAY);
+	
 	glBindVertexArray(VAO);
-	glDrawArrays(GL_TRIANGLES, 0, testFBX->nb_vertices);
+
+	//glBindBuffer(GL_ARRAY_BUFFER, posSSbo);
+	//glEnableClientState(GL_VERTEX_ARRAY);
+	/*GLfloat * tmp = new GLfloat[NUM_PARTICLES * 4];
+	int cpt = 0;
+	for (int i = 0; i < NUM_PARTICLES; i++)
+	{
+		tmp[cpt] = points[i].x;
+		tmp[cpt+1] = points[i].y;
+		tmp[cpt+2] = points[i].z;
+		tmp[cpt+3] = points[i].w;
+		cpt += 4;
+	}
+
+	glBufferData(GL_ARRAY_BUFFER, NUM_PARTICLES * 4 * sizeof(float), tmp, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, (GLvoid *)0);
+	glEnableVertexAttribArray(0);*/
+
+	//glBindBuffer(GL_ARRAY_BUFFER, colSSbo);
+	//glColorPointer(4, GL_FLOAT, 0, (void *)0);
+	//glEnableClientState(GL_COLOR_ARRAY);
+	//glColor3f(1, 0, 0);
+
+
+
+	glPointSize(3.);
+	glDrawArrays(GL_POINTS, 0, NUM_PARTICLES);
+	
 	glfwSwapBuffers(window);
 }
 
@@ -198,7 +357,7 @@ int main()
 {
     glfwInit();
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
 
     window = glfwCreateWindow(WIDTH, HEIGHT, "OpenGL Test", nullptr, nullptr);
